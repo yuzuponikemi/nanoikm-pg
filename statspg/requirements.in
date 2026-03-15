@@ -1,0 +1,26 @@
+# requirements.in
+pytest
+
+# Jupyter and interactive
+jupyter
+ipywidgets
+
+# Scientific computing
+numpy
+scipy
+pandas
+sympy
+networkx
+
+# Visualization
+matplotlib
+matplotlib-venn
+seaborn
+plotly
+
+# Statistics and ML
+statsmodels
+scikit-learn
+
+# Additional utilities
+tqdm
