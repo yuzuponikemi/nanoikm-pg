@@ -427,20 +427,21 @@ def train_q_learning(
     for episode in iterator:
         state = env.reset()
         total_reward = 0.0
-        step = 0
+        steps_taken = 0
 
-        for step in range(max_steps):
+        for _ in range(max_steps):
             action = policy.get_action(state)
             next_state, reward, done, _ = env.step(action)
             policy.update_q(state, action, reward, next_state, done)
             state = next_state
             total_reward += reward
+            steps_taken += 1
             if done:
                 break
 
         policy.decay_epsilon()
         episode_rewards.append(total_reward)
-        episode_lengths.append(step + 1)
+        episode_lengths.append(steps_taken)
         epsilon_history.append(policy.epsilon)
 
         # Periodic greedy evaluation
@@ -469,23 +470,15 @@ def train_q_learning(
 def _evaluate_q_greedy(env, policy, n_episodes: int, max_steps: int) -> float:
     """
     Evaluate a QPolicy with epsilon=0 (greedy).
-    Temporarily sets epsilon to 0 and restores it afterwards.
+    Reuses evaluate_policy(); uses try/finally so epsilon is always restored.
     """
     saved_epsilon = policy.epsilon
-    policy.epsilon = 0.0
-    rewards = []
-    for _ in range(n_episodes):
-        state = env.reset()
-        total = 0.0
-        for _ in range(max_steps):
-            action = policy.get_action(state)
-            state, reward, done, _ = env.step(action)
-            total += reward
-            if done:
-                break
-        rewards.append(total)
-    policy.epsilon = saved_epsilon
-    return float(np.mean(rewards))
+    try:
+        policy.epsilon = 0.0
+        result = evaluate_policy(env, policy, n_episodes=n_episodes)
+        return float(result['mean_reward'])
+    finally:
+        policy.epsilon = saved_epsilon
 
 
 def compute_returns(
