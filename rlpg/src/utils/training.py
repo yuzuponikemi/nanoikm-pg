@@ -481,6 +481,91 @@ def _evaluate_q_greedy(env, policy, n_episodes: int, max_steps: int) -> float:
         policy.epsilon = saved_epsilon
 
 
+def train_reinforce(
+    env,
+    policy,
+    n_episodes: int = 500,
+    max_steps: Optional[int] = None,
+    log_interval: int = 50,
+    seed: Optional[int] = None,
+    verbose: bool = True,
+) -> Dict[str, Any]:
+    """
+    Train a REINFORCEPolicy using Monte Carlo policy gradient.
+
+    Unlike train_policy() (population-based) and train_q_learning() (TD),
+    REINFORCE waits until each episode ends before updating the policy.
+    This is the defining characteristic of Monte Carlo policy gradient.
+
+    Args:
+        env: Environment object (InvertedPendulumEnv)
+        policy: REINFORCEPolicy instance
+        n_episodes: Number of training episodes. Recommended: 300-1000
+        max_steps: Max steps per episode (uses env.max_steps if None)
+        log_interval: Print progress every N episodes
+        seed: Random seed for reproducibility
+        verbose: Print progress
+
+    Returns:
+        Dictionary with:
+        - 'episode_rewards': Total reward per episode
+        - 'episode_losses':  Policy gradient loss per episode
+        - 'moving_avg':      Moving-average rewards (window=log_interval)
+    """
+    try:
+        import torch
+    except ImportError:
+        raise ImportError("PyTorch required for train_reinforce()")
+
+    if seed is not None:
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+
+    max_steps = max_steps or env.max_steps
+    episode_rewards: List[float] = []
+    episode_losses: List[float] = []
+
+    iterator = tqdm(range(n_episodes), desc="REINFORCE") if verbose else range(n_episodes)
+
+    for episode in iterator:
+        state = env.reset()
+        total_reward = 0.0
+
+        for _ in range(max_steps):
+            action, log_prob = policy.get_action_train(state)
+            next_state, reward, done, _ = env.step(action)
+            policy.store_transition(log_prob, reward)
+            total_reward += reward
+            state = next_state
+            if done:
+                break
+
+        # Monte Carlo update: called once per episode after it ends
+        loss = policy.update_on_episode()
+        episode_rewards.append(total_reward)
+        episode_losses.append(loss)
+
+        if verbose and (episode + 1) % log_interval == 0:
+            avg = float(np.mean(episode_rewards[-log_interval:]))
+            tqdm.write(
+                f"Ep {episode+1:5d} | "
+                f"Avg Reward {avg:6.1f} | "
+                f"Loss {loss:.4f}"
+            )
+
+    window = log_interval
+    moving_avg = [
+        float(np.mean(episode_rewards[max(0, i - window + 1): i + 1]))
+        for i in range(len(episode_rewards))
+    ]
+
+    return {
+        'episode_rewards': episode_rewards,
+        'episode_losses': episode_losses,
+        'moving_avg': moving_avg,
+    }
+
+
 def compute_returns(
     rewards: List[float],
     gamma: float = 0.99

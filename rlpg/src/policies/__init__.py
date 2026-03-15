@@ -7,5 +7,9 @@ from .random_policy import RandomPolicy
 from .linear_policy import LinearPolicy
 from .neural_policy import NeuralNetworkPolicy
 from .q_policy import QTable, QPolicy
+from .policy_gradient import REINFORCEPolicy
 
-__all__ = ["Policy", "RandomPolicy", "LinearPolicy", "NeuralNetworkPolicy", "QTable", "QPolicy"]
+__all__ = [
+    "Policy", "RandomPolicy", "LinearPolicy", "NeuralNetworkPolicy",
+    "QTable", "QPolicy", "REINFORCEPolicy",
+]
