@@ -6,5 +6,6 @@ from .base import Policy
 from .random_policy import RandomPolicy
 from .linear_policy import LinearPolicy
 from .neural_policy import NeuralNetworkPolicy
+from .q_policy import QPolicy
 
-__all__ = ["Policy", "RandomPolicy", "LinearPolicy", "NeuralNetworkPolicy"]
+__all__ = ["Policy", "RandomPolicy", "LinearPolicy", "NeuralNetworkPolicy", "QPolicy"]
