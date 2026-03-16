@@ -426,3 +426,144 @@ def normalize_returns(returns: np.ndarray) -> np.ndarray:
         return returns - mean
 
     return (returns - mean) / std
+
+
+def train_reinforce(
+    policy,
+    env,
+    n_episodes: int = 500,
+    gamma: float = 0.99,
+    eval_every: int = 50,
+    verbose: bool = True,
+) -> Dict[str, Any]:
+    """
+    Train a policy using the REINFORCE (Monte-Carlo policy gradient) algorithm.
+
+    The policy must implement:
+        - get_action_train(state) -> (action, log_prob)
+        - store_transition(log_prob, reward)
+        - update_on_episode() -> info_dict
+
+    Args:
+        policy:      Policy object supporting REINFORCE interface
+        env:         Environment object
+        n_episodes:  Number of training episodes
+        gamma:       Discount factor (passed to policy.update_on_episode if needed)
+        eval_every:  Print progress every N episodes
+        verbose:     Whether to print progress
+
+    Returns:
+        Dictionary with:
+        - 'reward_history': List of total rewards per episode
+        - 'actor_loss_history': List of actor losses per episode
+    """
+    reward_history: List[float] = []
+    actor_loss_history: List[float] = []
+
+    iterator = range(n_episodes)
+    if verbose:
+        iterator = tqdm(iterator, desc="REINFORCE")
+
+    for episode in iterator:
+        state = env.reset()
+        done = False
+        step = 0
+
+        while not done and step < env.max_steps:
+            action, log_prob = policy.get_action_train(state)
+            next_state, reward, done, _ = env.step(action)
+            policy.store_transition(log_prob, reward)
+            state = next_state
+            step += 1
+
+        info = policy.update_on_episode()
+        total_reward = info.get('total_reward', 0.0)
+        actor_loss = info.get('actor_loss', 0.0)
+
+        reward_history.append(total_reward)
+        actor_loss_history.append(actor_loss)
+
+        if verbose and (episode + 1) % eval_every == 0:
+            recent_mean = np.mean(reward_history[-eval_every:])
+            if hasattr(iterator, 'set_postfix'):
+                iterator.set_postfix({'mean_reward': f'{recent_mean:.1f}'})
+            else:
+                print(f"Episode {episode + 1}/{n_episodes}  mean_reward={recent_mean:.1f}")
+
+    return {
+        'reward_history': reward_history,
+        'actor_loss_history': actor_loss_history,
+    }
+
+
+def train_actor_critic(
+    policy,
+    env,
+    n_episodes: int = 500,
+    gamma: float = 0.99,
+    eval_every: int = 50,
+    verbose: bool = True,
+) -> Dict[str, Any]:
+    """
+    Train a policy using the Actor-Critic (A2C) algorithm.
+
+    The policy must implement:
+        - get_action_train(state) -> (action, log_prob, value)
+        - store_transition(log_prob, reward, value)
+        - update_on_episode() -> info_dict
+
+    Args:
+        policy:      ActorCriticPolicy (or compatible) object
+        env:         Environment object
+        n_episodes:  Number of training episodes
+        gamma:       Discount factor (used by policy.update_on_episode internally)
+        eval_every:  Print progress every N episodes
+        verbose:     Whether to print progress
+
+    Returns:
+        Dictionary with:
+        - 'reward_history': List of total rewards per episode
+        - 'actor_loss_history': List of actor losses per episode
+        - 'critic_loss_history': List of critic losses per episode
+    """
+    reward_history: List[float] = []
+    actor_loss_history: List[float] = []
+    critic_loss_history: List[float] = []
+
+    iterator = range(n_episodes)
+    if verbose:
+        iterator = tqdm(iterator, desc="Actor-Critic")
+
+    for episode in iterator:
+        state = env.reset()
+        done = False
+        step = 0
+
+        while not done and step < env.max_steps:
+            action, log_prob, value = policy.get_action_train(state)
+            next_state, reward, done, _ = env.step(action)
+            policy.store_transition(log_prob, reward, value)
+            state = next_state
+            step += 1
+
+        info = policy.update_on_episode()
+        total_reward = info.get('total_reward', 0.0)
+        actor_loss = info.get('actor_loss', 0.0)
+        critic_loss = info.get('critic_loss', 0.0)
+
+        reward_history.append(total_reward)
+        actor_loss_history.append(actor_loss)
+        critic_loss_history.append(critic_loss)
+
+        if verbose and (episode + 1) % eval_every == 0:
+            recent_mean = np.mean(reward_history[-eval_every:])
+            if hasattr(iterator, 'set_postfix'):
+                iterator.set_postfix({'mean_reward': f'{recent_mean:.1f}'})
+            else:
+                print(f"Episode {episode + 1}/{n_episodes}  mean_reward={recent_mean:.1f}")
+
+    return {
+        'reward_history': reward_history,
+        'actor_loss_history': actor_loss_history,
+        'critic_loss_history': critic_loss_history,
+    }
