@@ -210,11 +210,11 @@ class TestInvertedPendulumEnvDoneConditions:
         """Episode ends when max_steps is reached."""
         env = InvertedPendulumEnv(max_steps=5)
         env.reset(initial_state=[0.0, 0.0, 0.0, 0.0])
-        states, actions, rewards, info = [], [], [], {}
         done = False
+        info = {}
         steps = 0
         while not done:
-            _, reward, done, info = env.step(0.0)
+            _, _, done, info = env.step(0.0)
             steps += 1
         assert steps == 5
         assert info["terminated_by_time"]
@@ -230,8 +230,8 @@ class TestInvertedPendulumEnvDoneConditions:
         env = InvertedPendulumEnv(theta_threshold=0.01)
         env.reset(initial_state=[0.0, 0.0, 0.02, 0.0])
         _, _, done, info = env.step(0.0)
-        if done:
-            assert info["terminated_by_angle"]
+        assert done, "Expected done=True: initial angle 0.02 exceeds threshold 0.01"
+        assert info["terminated_by_angle"]
 
     def test_info_flags_position_termination(self):
         env = InvertedPendulumEnv(x_threshold=0.1)
@@ -242,8 +242,8 @@ class TestInvertedPendulumEnvDoneConditions:
             _, _, done, info = env.step(10.0)
             if done:
                 break
-        if done:
-            assert info["terminated_by_position"]
+        assert done, "Expected done=True: cart should exceed x_threshold=0.1 within 10 steps"
+        assert info["terminated_by_position"]
 
 
 class TestInvertedPendulumEnvStateLabels:
