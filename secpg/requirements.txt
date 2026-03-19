@@ -1,0 +1,4 @@
+flask>=3.0.0
+requests>=2.31.0
+ipython>=8.0.0
+jupyter>=1.0.0
