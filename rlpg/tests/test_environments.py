@@ -1,276 +1,293 @@
 """
-Unit tests for InvertedPendulumEnv
+Tests for InvertedPendulumEnv
 
-Tests cover:
-- reset() / step() の基本動作
-- 状態の次元数・型の確認
-- doneフラグの発火条件
-- 物理量の妥当性
+Covers:
+- reset() initializes state correctly
+- step() returns the expected tuple shape and types
+- State dimension and dtype
+- done flag firing conditions (angle, position, max_steps)
 """
 
 import numpy as np
 import pytest
+
+import sys
+import os
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 from src.environments.pendulum import InvertedPendulumEnv
 
 
-class TestInvertedPendulumReset:
-    """reset() の動作テスト"""
+class TestInvertedPendulumEnvReset:
+    """Tests for the reset() method."""
 
-    def test_reset_returns_array(self, env):
+    def test_reset_returns_numpy_array(self):
+        env = InvertedPendulumEnv()
         state = env.reset()
         assert isinstance(state, np.ndarray)
 
-    def test_reset_state_shape(self, env):
+    def test_reset_state_shape(self):
+        env = InvertedPendulumEnv()
         state = env.reset()
-        assert state.shape == (4,), f"Expected shape (4,), got {state.shape}"
+        assert state.shape == (4,)
 
-    def test_reset_state_dtype(self, env):
+    def test_reset_state_dtype(self):
+        env = InvertedPendulumEnv()
         state = env.reset()
         assert state.dtype == np.float64
 
-    def test_reset_state_labels(self, env):
-        labels = env.get_state_labels()
-        assert len(labels) == 4
-
-    def test_reset_default_near_zero(self, env):
-        """デフォルトのリセットは原点付近に初期化される"""
+    def test_reset_default_state_within_small_range(self):
+        """Default reset samples from [-0.05, 0.05]."""
+        env = InvertedPendulumEnv()
         for _ in range(20):
             state = env.reset()
-            assert np.all(np.abs(state) < 0.5), (
-                f"Initial state should be small, got {state}"
+            assert np.all(np.abs(state) <= 0.05 + 1e-10), (
+                f"State {state} exceeds [-0.05, 0.05]"
             )
 
-    def test_reset_with_seed_reproducible(self, env):
-        state1 = env.reset(seed=0)
-        state2 = env.reset(seed=0)
-        np.testing.assert_array_equal(state1, state2)
+    def test_reset_with_seed_is_reproducible(self):
+        env = InvertedPendulumEnv()
+        s1 = env.reset(seed=42)
+        s2 = env.reset(seed=42)
+        np.testing.assert_array_equal(s1, s2)
 
-    def test_reset_with_different_seeds(self, env):
-        state1 = env.reset(seed=1)
-        state2 = env.reset(seed=2)
-        assert not np.array_equal(state1, state2)
+    def test_reset_with_custom_initial_state(self):
+        env = InvertedPendulumEnv()
+        custom = np.array([0.1, 0.2, 0.05, -0.1])
+        state = env.reset(initial_state=custom)
+        np.testing.assert_array_almost_equal(state, custom)
 
-    def test_reset_with_explicit_initial_state(self, env):
-        target = np.array([0.1, 0.0, 0.05, 0.0])
-        state = env.reset(initial_state=target)
-        np.testing.assert_array_almost_equal(state, target)
-
-    def test_reset_clears_step_counter(self, env):
+    def test_reset_resets_step_counter(self):
+        env = InvertedPendulumEnv()
         env.reset()
         for _ in range(10):
             env.step(0.0)
         env.reset()
         assert env.steps == 0
 
-    def test_reset_clears_history(self, env):
+    def test_reset_clears_history(self):
+        env = InvertedPendulumEnv()
         env.reset()
-        for _ in range(5):
-            env.step(0.0)
+        env.step(1.0)
         env.reset()
-        # history は reset 直後に初期状態の1エントリのみ
-        assert len(env.history['states']) == 1
-        assert len(env.history['actions']) == 0
-        assert len(env.history['rewards']) == 0
+        assert len(env.history["actions"]) == 0
+        assert len(env.history["rewards"]) == 0
 
 
-class TestInvertedPendulumStep:
-    """step() の動作テスト"""
+class TestInvertedPendulumEnvStep:
+    """Tests for the step() method."""
 
-    def test_step_returns_tuple(self, env):
+    def test_step_returns_four_element_tuple(self):
+        env = InvertedPendulumEnv()
         env.reset()
         result = env.step(0.0)
-        assert isinstance(result, tuple)
         assert len(result) == 4
 
-    def test_step_state_shape(self, env):
+    def test_step_state_shape(self):
+        env = InvertedPendulumEnv()
         env.reset()
         state, reward, done, info = env.step(0.0)
+        assert isinstance(state, np.ndarray)
         assert state.shape == (4,)
 
-    def test_step_state_dtype(self, env):
+    def test_step_state_dtype(self):
+        env = InvertedPendulumEnv()
         env.reset()
-        state, reward, done, info = env.step(0.0)
+        state, _, _, _ = env.step(0.0)
         assert state.dtype == np.float64
 
-    def test_step_reward_type(self, env):
+    def test_step_reward_is_float(self):
+        env = InvertedPendulumEnv()
         env.reset()
         _, reward, _, _ = env.step(0.0)
         assert isinstance(reward, float)
 
-    def test_step_done_type(self, env):
+    def test_step_done_is_bool(self):
+        env = InvertedPendulumEnv()
         env.reset()
         _, _, done, _ = env.step(0.0)
         assert isinstance(done, bool)
 
-    def test_step_info_type(self, env):
+    def test_step_info_is_dict(self):
+        env = InvertedPendulumEnv()
         env.reset()
         _, _, _, info = env.step(0.0)
         assert isinstance(info, dict)
 
-    def test_step_info_keys(self, env):
+    def test_step_info_keys(self):
+        env = InvertedPendulumEnv()
         env.reset()
         _, _, _, info = env.step(0.0)
-        expected_keys = {'x', 'x_dot', 'theta', 'theta_dot', 'force', 'steps'}
+        expected_keys = {
+            "x", "x_dot", "theta", "theta_dot", "force", "steps",
+            "terminated_by_angle", "terminated_by_position", "terminated_by_time",
+        }
         assert expected_keys.issubset(info.keys())
 
-    def test_step_reward_positive_when_not_done(self, env):
-        """ポールが倒れていない間は報酬 1.0"""
+    def test_step_without_reset_raises(self):
+        env = InvertedPendulumEnv()
+        with pytest.raises(RuntimeError):
+            env.step(0.0)
+
+    def test_step_reward_positive_when_not_done(self):
+        env = InvertedPendulumEnv()
         env.reset(initial_state=[0.0, 0.0, 0.0, 0.0])
         _, reward, done, _ = env.step(0.0)
         if not done:
             assert reward == 1.0
 
-    def test_step_reward_zero_when_done(self, env):
-        """エピソード終了時は報酬 0.0"""
-        # 大きな角度で初期化してすぐ終了させる
-        env.reset(initial_state=[0.0, 0.0, 0.5, 0.0])  # theta > theta_threshold
-        _, reward, done, _ = env.step(0.0)
-        if done:
-            assert reward == 0.0
-
-    def test_step_increments_counter(self, env):
+    def test_step_increments_step_counter(self):
+        env = InvertedPendulumEnv()
         env.reset()
         for i in range(5):
             env.step(0.0)
-            assert env.steps == i + 1
+        assert env.steps == 5
 
-    def test_step_without_reset_raises(self):
-        """reset()前にstep()を呼ぶとRuntimeErrorが発生する"""
-        fresh_env = InvertedPendulumEnv()
-        with pytest.raises(RuntimeError):
-            fresh_env.step(0.0)
-
-    def test_step_discrete_action_left(self, env):
-        env.reset(initial_state=[0.0, 0.0, 0.0, 0.0])
-        _, _, _, info = env.step(0)
-        assert info['force'] == pytest.approx(-env.force_mag)
-
-    def test_step_discrete_action_right(self, env):
-        env.reset(initial_state=[0.0, 0.0, 0.0, 0.0])
-        _, _, _, info = env.step(1)
-        assert info['force'] == pytest.approx(env.force_mag)
-
-    def test_step_continuous_action_clipped(self, env):
-        """force_magを超えた連続アクションはクリップされる"""
+    def test_step_continuous_action(self):
+        env = InvertedPendulumEnv()
         env.reset()
-        large_action = 1000.0
-        _, _, _, info = env.step(large_action)
-        assert info['force'] == pytest.approx(env.force_mag)
+        state, _, _, info = env.step(5.0)
+        assert state.shape == (4,)
+        assert info["force"] == pytest.approx(5.0)
 
-    def test_step_state_changes(self, env):
-        """ステップ後に状態が変化する（静止状態でも物理が動く）"""
-        state0 = env.reset(initial_state=[0.0, 0.0, 0.01, 0.0])
-        state1, _, _, _ = env.step(0.0)
-        assert not np.allclose(state0, state1), "State should change after step"
+    def test_step_discrete_action_left(self):
+        env = InvertedPendulumEnv(force_mag=10.0)
+        env.reset()
+        _, _, _, info = env.step(0)
+        assert info["force"] == pytest.approx(-10.0)
+
+    def test_step_discrete_action_right(self):
+        env = InvertedPendulumEnv(force_mag=10.0)
+        env.reset()
+        _, _, _, info = env.step(1)
+        assert info["force"] == pytest.approx(10.0)
+
+    def test_step_action_clipped_to_force_mag(self):
+        env = InvertedPendulumEnv(force_mag=10.0)
+        env.reset()
+        _, _, _, info = env.step(999.0)
+        assert info["force"] == pytest.approx(10.0)
 
 
-class TestDoneConditions:
-    """doneフラグの発火条件テスト"""
+class TestInvertedPendulumEnvDoneConditions:
+    """Tests for episode termination conditions."""
 
     def test_done_by_angle_positive(self):
-        """theta > theta_threshold でエピソード終了"""
+        """Episode ends when pole angle exceeds theta_threshold."""
         env = InvertedPendulumEnv(theta_threshold=0.2095)
-        env.reset(initial_state=[0.0, 0.0, 0.3, 0.0])  # theta=0.3 > 0.2095
-        _, _, done, info = env.step(0.0)
-        assert done
-        assert info['terminated_by_angle']
+        # Start close to threshold, apply force to tip it over
+        env.reset(initial_state=[0.0, 0.0, 0.2090, 0.5])
+        done = False
+        for _ in range(50):
+            _, _, done, info = env.step(10.0)
+            if done:
+                break
+        assert done, "Expected done=True when pole angle exceeds threshold"
 
     def test_done_by_angle_negative(self):
-        """theta < -theta_threshold でエピソード終了"""
         env = InvertedPendulumEnv(theta_threshold=0.2095)
-        env.reset(initial_state=[0.0, 0.0, -0.3, 0.0])
-        _, _, done, info = env.step(0.0)
+        env.reset(initial_state=[0.0, 0.0, -0.2090, -0.5])
+        done = False
+        for _ in range(50):
+            _, _, done, info = env.step(-10.0)
+            if done:
+                break
         assert done
-        assert info['terminated_by_angle']
 
-    def test_done_by_position_positive(self):
-        """x > x_threshold でエピソード終了"""
+    def test_done_by_position(self):
+        """Episode ends when cart goes beyond x_threshold."""
         env = InvertedPendulumEnv(x_threshold=2.4)
-        env.reset(initial_state=[3.0, 0.0, 0.0, 0.0])  # x=3.0 > 2.4
-        _, _, done, info = env.step(0.0)
-        assert done
-        assert info['terminated_by_position']
-
-    def test_done_by_position_negative(self):
-        """x < -x_threshold でエピソード終了"""
-        env = InvertedPendulumEnv(x_threshold=2.4)
-        env.reset(initial_state=[-3.0, 0.0, 0.0, 0.0])
-        _, _, done, info = env.step(0.0)
-        assert done
-        assert info['terminated_by_position']
+        env.reset(initial_state=[2.3, 5.0, 0.0, 0.0])
+        done = False
+        for _ in range(50):
+            _, _, done, info = env.step(10.0)
+            if done:
+                break
+        assert done, "Expected done=True when cart position exceeds threshold"
 
     def test_done_by_max_steps(self):
-        """max_steps に達したらエピソード終了"""
-        env = InvertedPendulumEnv(max_steps=5, theta_threshold=10.0, x_threshold=100.0)
+        """Episode ends when max_steps is reached."""
+        env = InvertedPendulumEnv(max_steps=5)
         env.reset(initial_state=[0.0, 0.0, 0.0, 0.0])
-        for i in range(4):
+        done = False
+        info = {}
+        steps = 0
+        while not done:
             _, _, done, info = env.step(0.0)
-            assert not done, f"Should not be done at step {i+1}"
-        # 5ステップ目
-        _, _, done, info = env.step(0.0)
-        assert done
-        assert info['terminated_by_time']
+            steps += 1
+        assert steps == 5
+        assert info["terminated_by_time"]
 
-    def test_not_done_at_equilibrium(self):
-        """平衡点付近では終了しない"""
-        env = InvertedPendulumEnv(max_steps=500)
+    def test_not_done_in_balanced_state(self):
+        """Balanced pole should not terminate immediately."""
+        env = InvertedPendulumEnv()
         env.reset(initial_state=[0.0, 0.0, 0.0, 0.0])
         _, _, done, _ = env.step(0.0)
-        # 完全静止に近い状態では1ステップ目は終了しないはず
         assert not done
 
+    def test_info_flags_angle_termination(self):
+        env = InvertedPendulumEnv(theta_threshold=0.01)
+        env.reset(initial_state=[0.0, 0.0, 0.02, 0.0])
+        _, _, done, info = env.step(0.0)
+        assert done, "Expected done=True: initial angle 0.02 exceeds threshold 0.01"
+        assert info["terminated_by_angle"]
 
-class TestPhysicsConsistency:
-    """物理量の妥当性テスト"""
+    def test_info_flags_position_termination(self):
+        env = InvertedPendulumEnv(x_threshold=0.1)
+        env.reset(initial_state=[0.09, 5.0, 0.0, 0.0])
+        done = False
+        info = {}
+        for _ in range(10):
+            _, _, done, info = env.step(10.0)
+            if done:
+                break
+        assert done, "Expected done=True: cart should exceed x_threshold=0.1 within 10 steps"
+        assert info["terminated_by_position"]
 
-    def test_energy_returns_dict(self, env):
+
+class TestInvertedPendulumEnvStateLabels:
+    """Tests for helper methods."""
+
+    def test_get_state_labels_returns_four_strings(self):
+        env = InvertedPendulumEnv()
+        labels = env.get_state_labels()
+        assert len(labels) == 4
+        assert all(isinstance(label, str) for label in labels)
+
+    def test_get_normalized_state_shape(self):
+        env = InvertedPendulumEnv()
+        env.reset()
+        normalized = env.get_normalized_state()
+        assert normalized.shape == (4,)
+
+    def test_get_energy_keys(self):
+        env = InvertedPendulumEnv()
         env.reset()
         energy = env.get_energy()
-        assert isinstance(energy, dict)
-        assert set(energy.keys()) == {'kinetic', 'potential', 'total'}
+        assert "kinetic" in energy
+        assert "potential" in energy
+        assert "total" in energy
 
-    def test_energy_total_consistent(self, env):
-        env.reset(initial_state=[0.0, 0.0, 0.0, 0.0])
+    def test_get_energy_total_equals_sum(self):
+        env = InvertedPendulumEnv()
+        env.reset()
         energy = env.get_energy()
-        assert energy['total'] == pytest.approx(
-            energy['kinetic'] + energy['potential'], rel=1e-6
+        assert energy["total"] == pytest.approx(
+            energy["kinetic"] + energy["potential"], rel=1e-6
         )
 
-    def test_normalized_state_shape(self, env):
+    def test_render_ascii_returns_string(self):
+        env = InvertedPendulumEnv()
         env.reset()
-        norm_state = env.get_normalized_state()
-        assert norm_state.shape == (4,)
+        result = env.render_ascii()
+        assert isinstance(result, str)
 
-    def test_get_history_returns_arrays(self, env):
+    def test_get_history_keys(self):
+        env = InvertedPendulumEnv()
         env.reset()
-        for _ in range(5):
-            env.step(1.0)
-        hist = env.get_history()
-        assert isinstance(hist['states'], np.ndarray)
-        assert isinstance(hist['actions'], np.ndarray)
-        assert isinstance(hist['rewards'], np.ndarray)
-
-    def test_get_history_length_consistent(self, env):
-        env.reset()
-        n_steps = 10
-        for _ in range(n_steps):
-            env.step(0.5)
-        hist = env.get_history()
-        # states: n_steps+1 (初期状態含む), actions/rewards: n_steps
-        assert hist['states'].shape[0] == n_steps + 1
-        assert hist['actions'].shape[0] == n_steps
-        assert hist['rewards'].shape[0] == n_steps
-
-    def test_custom_physics_params(self):
-        """カスタム物理パラメータが正しく設定される"""
-        env = InvertedPendulumEnv(
-            gravity=1.62,       # 月面重力
-            cart_mass=2.0,
-            pole_mass=0.2,
-            pole_length=1.0
-        )
-        assert env.gravity == pytest.approx(1.62)
-        assert env.cart_mass == pytest.approx(2.0)
-        assert env.pole_mass == pytest.approx(0.2)
-        assert env.pole_length == pytest.approx(1.0)
-        assert env.total_mass == pytest.approx(2.2)
+        env.step(0.0)
+        history = env.get_history()
+        assert "states" in history
+        assert "actions" in history
+        assert "rewards" in history

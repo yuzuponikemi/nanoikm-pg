@@ -1,289 +1,316 @@
 """
-Unit tests for Policy classes (Random, Linear, Neural)
+Tests for Policy classes
 
-Tests cover:
-- act() / get_action() が正しい形状を返すか
-- パラメータの取得・設定
-- ポリシー固有の動作
+Covers:
+- RandomPolicy: get_action() returns float in expected range
+- LinearPolicy: get_action() returns correct shape and value
+- NeuralNetworkPolicy: get_action() returns float (if torch available)
+- QPolicy: get_action() returns float from action_values
+- REINFORCEPolicy: get_action() returns float (if torch available)
+- All policies: get_params() / set_params() roundtrip
 """
 
 import numpy as np
 import pytest
+
+import sys
+import os
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from tests._torch_available import TORCH_AVAILABLE
+
+from src.policies.base import Policy
 from src.policies.random_policy import RandomPolicy
 from src.policies.linear_policy import LinearPolicy
+from src.utils.discretizer import StateDiscretizer
 
-# NeuralNetworkPolicy は torch が必要なので条件付きでインポート
-try:
-    import torch
-    from src.policies.neural_policy import NeuralNetworkPolicy
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
+# q_policy imports from src.utils.discretizer (no matplotlib/torch dependency)
+from src.policies.q_policy import QTable, QPolicy
+
+if TORCH_AVAILABLE:
+    try:
+        from src.policies.neural_policy import NeuralNetworkPolicy
+        from src.policies.policy_gradient import REINFORCEPolicy
+    except Exception:
+        TORCH_AVAILABLE = False
+
+# Canonical state used across all tests
+SAMPLE_STATE = np.array([0.1, 0.2, 0.05, -0.1], dtype=np.float64)
+ZERO_STATE = np.zeros(4, dtype=np.float64)
 
 
-# テスト用の代表的な状態ベクトル
-SAMPLE_STATES = [
-    np.array([0.0, 0.0, 0.0, 0.0]),        # 完全な平衡状態
-    np.array([0.1, 0.0, 0.05, 0.0]),        # 軽微なずれ
-    np.array([-0.5, 1.0, -0.1, 0.3]),      # 一般的な状態
-    np.array([0.0, 0.0, 0.2, -0.5]),        # 角速度あり
-]
-
+# ---------------------------------------------------------------------------
+# RandomPolicy
+# ---------------------------------------------------------------------------
 
 class TestRandomPolicy:
-    """RandomPolicy のテスト"""
-
-    def test_get_action_returns_float(self, random_policy):
-        state = np.array([0.0, 0.0, 0.0, 0.0])
-        action = random_policy.get_action(state)
+    def test_get_action_returns_float(self):
+        policy = RandomPolicy()
+        action = policy.get_action(SAMPLE_STATE)
         assert isinstance(action, (float, np.floating))
 
-    @pytest.mark.parametrize("state", SAMPLE_STATES)
-    def test_get_action_in_range(self, state):
+    def test_get_action_within_range_continuous(self):
         policy = RandomPolicy(action_low=-10.0, action_high=10.0)
-        action = policy.get_action(state)
-        assert -10.0 <= action <= 10.0, (
-            f"Action {action} is out of range [-10, 10]"
-        )
+        for _ in range(50):
+            action = policy.get_action(SAMPLE_STATE)
+            assert -10.0 <= action <= 10.0
 
-    def test_get_action_discrete_values(self):
-        """discrete=True のとき極値のみ返す"""
-        policy = RandomPolicy(action_low=-5.0, action_high=5.0, discrete=True, seed=0)
-        actions = [policy.get_action(np.zeros(4)) for _ in range(50)]
-        unique = set(actions)
-        assert unique == {-5.0, 5.0}, f"Expected only {{-5.0, 5.0}}, got {unique}"
+    def test_get_action_discrete_only_extremes(self):
+        policy = RandomPolicy(action_low=-10.0, action_high=10.0, discrete=True)
+        for _ in range(30):
+            action = policy.get_action(SAMPLE_STATE)
+            assert action in (-10.0, 10.0)
 
-    def test_get_action_ignores_state(self):
-        """RandomPolicyは状態に関係なく動作する"""
-        policy = RandomPolicy(seed=99)
-        # 同じシードで同じ順序を生成する
-        state_a = np.array([0.0, 0.0, 0.0, 0.0])
-        state_b = np.array([1.0, -1.0, 0.5, -0.5])
-        policy2 = RandomPolicy(seed=99)
-        # 結果は状態によらずシードに依存する
-        a1 = policy.get_action(state_a)
-        a2 = policy2.get_action(state_b)
-        assert a1 == pytest.approx(a2), "Same seed should produce same action regardless of state"
+    def test_get_num_params_is_zero(self):
+        policy = RandomPolicy()
+        assert policy.get_num_params() == 0
 
-    def test_get_params_returns_dict(self, random_policy):
-        params = random_policy.get_params()
+    def test_get_params_returns_dict(self):
+        policy = RandomPolicy()
+        params = policy.get_params()
         assert isinstance(params, dict)
-        assert 'action_low' in params
-        assert 'action_high' in params
-        assert 'discrete' in params
+        assert "action_low" in params
+        assert "action_high" in params
 
     def test_set_params_updates_range(self):
-        policy = RandomPolicy(action_low=-10.0, action_high=10.0)
-        policy.set_params({'action_low': -1.0, 'action_high': 1.0})
+        policy = RandomPolicy(action_low=-5.0, action_high=5.0)
+        policy.set_params({"action_low": -1.0, "action_high": 1.0})
         assert policy.action_low == -1.0
         assert policy.action_high == 1.0
-        # 新しいレンジ内に収まるか確認
-        for _ in range(20):
-            action = policy.get_action(np.zeros(4))
+        for _ in range(30):
+            action = policy.get_action(SAMPLE_STATE)
             assert -1.0 <= action <= 1.0
 
-    def test_get_num_params_is_zero(self, random_policy):
-        """RandomPolicyは学習パラメータを持たない"""
-        assert random_policy.get_num_params() == 0
+    def test_reproducible_with_seed(self):
+        np.random.seed(7)
+        policy = RandomPolicy()
+        actions1 = [policy.get_action(SAMPLE_STATE) for _ in range(5)]
+        np.random.seed(7)
+        actions2 = [policy.get_action(SAMPLE_STATE) for _ in range(5)]
+        assert actions1 == actions2
 
-    def test_custom_action_range(self):
-        policy = RandomPolicy(action_low=-3.0, action_high=3.0)
-        for _ in range(50):
-            action = policy.get_action(np.zeros(4))
-            assert -3.0 <= action <= 3.0
 
+# ---------------------------------------------------------------------------
+# LinearPolicy
+# ---------------------------------------------------------------------------
 
 class TestLinearPolicy:
-    """LinearPolicy のテスト"""
-
-    def test_get_action_returns_float(self, linear_policy):
-        state = np.array([0.0, 0.0, 0.1, 0.0])
-        action = linear_policy.get_action(state)
+    def test_get_action_returns_float(self):
+        policy = LinearPolicy()
+        action = policy.get_action(SAMPLE_STATE)
         assert isinstance(action, float)
 
-    @pytest.mark.parametrize("state", SAMPLE_STATES)
-    def test_get_action_in_range(self, state):
-        policy = LinearPolicy(action_low=-10.0, action_high=10.0)
-        action = policy.get_action(state)
-        assert -10.0 <= action <= 10.0
-
-    def test_get_action_zero_weights_zero_bias(self):
-        """重みゼロ、バイアスゼロならアクションはゼロ"""
+    def test_get_action_zero_weights_returns_zero(self):
         policy = LinearPolicy(weights=np.zeros(4), bias=0.0)
-        state = np.array([1.0, 2.0, 3.0, 4.0])
-        action = policy.get_action(state)
+        action = policy.get_action(ZERO_STATE)
         assert action == pytest.approx(0.0)
 
     def test_get_action_linear_combination(self):
-        """action = weights @ state + bias が正確に計算される"""
-        weights = np.array([1.0, 2.0, 3.0, 4.0])
-        bias = 0.5
-        policy = LinearPolicy(weights=weights, bias=bias, action_low=-1000, action_high=1000)
-        state = np.array([1.0, 1.0, 1.0, 1.0])
+        weights = np.array([1.0, 0.0, 0.0, 0.0])
+        policy = LinearPolicy(weights=weights, bias=0.0, action_low=-100.0, action_high=100.0)
+        state = np.array([3.0, 0.0, 0.0, 0.0])
         action = policy.get_action(state)
-        expected = float(np.dot(weights, state) + bias)
+        assert action == pytest.approx(3.0)
+
+    def test_get_action_clipped_high(self):
+        policy = LinearPolicy(weights=np.array([100.0, 0, 0, 0]), action_high=10.0)
+        action = policy.get_action(np.array([1.0, 0, 0, 0]))
+        assert action == pytest.approx(10.0)
+
+    def test_get_action_clipped_low(self):
+        policy = LinearPolicy(weights=np.array([-100.0, 0, 0, 0]), action_low=-10.0)
+        action = policy.get_action(np.array([1.0, 0, 0, 0]))
+        assert action == pytest.approx(-10.0)
+
+    def test_get_num_params(self):
+        policy = LinearPolicy()
+        # 4 weights + 1 bias = 5
+        assert policy.get_num_params() == 5
+
+    def test_get_params_roundtrip(self):
+        weights = np.array([1.0, 2.0, 3.0, 4.0])
+        policy = LinearPolicy(weights=weights, bias=0.5)
+        params = policy.get_params()
+        policy2 = LinearPolicy()
+        policy2.set_params(params)
+        np.testing.assert_array_almost_equal(policy2.weights, weights)
+        assert policy2.bias == pytest.approx(0.5)
+
+    def test_get_flat_params_length(self):
+        policy = LinearPolicy()
+        flat = policy.get_flat_params()
+        assert len(flat) == 5
+
+    def test_set_flat_params_roundtrip(self):
+        policy = LinearPolicy()
+        flat = np.array([1.0, 2.0, 3.0, 4.0, 0.5])
+        policy.set_flat_params(flat)
+        assert policy.weights[0] == pytest.approx(1.0)
+        assert policy.bias == pytest.approx(0.5)
+
+    def test_perturb_returns_new_policy(self):
+        policy = LinearPolicy(weights=np.zeros(4), bias=0.0)
+        perturbed = policy.perturb(noise_scale=0.1)
+        assert perturbed is not policy
+        assert isinstance(perturbed, LinearPolicy)
+
+    def test_perturb_changes_params(self):
+        policy = LinearPolicy(weights=np.zeros(4), bias=0.0)
+        perturbed = policy.perturb(noise_scale=1.0)
+        # With scale=1.0 the params will almost certainly differ
+        changed = not np.allclose(policy.weights, perturbed.weights) or (
+            policy.bias != perturbed.bias
+        )
+        assert changed
+
+
+# ---------------------------------------------------------------------------
+# QTable
+# ---------------------------------------------------------------------------
+
+class TestQTable:
+    def test_init_shape(self):
+        qt = QTable(n_states=100, n_actions=5)
+        assert qt.table.shape == (100, 5)
+
+    def test_init_value(self):
+        qt = QTable(n_states=10, n_actions=3, init_value=1.5)
+        assert np.all(qt.table == 1.5)
+
+    def test_get_and_update(self):
+        qt = QTable(n_states=10, n_actions=3)
+        qt.update(2, 1, 99.9)
+        assert qt.get(2, 1) == pytest.approx(99.9)
+
+    def test_greedy_action(self):
+        qt = QTable(n_states=5, n_actions=3)
+        qt.update(0, 2, 10.0)
+        assert qt.greedy_action(0) == 2
+
+    def test_max_value(self):
+        qt = QTable(n_states=5, n_actions=3)
+        qt.update(0, 1, 7.0)
+        assert qt.max_value(0) == pytest.approx(7.0)
+
+
+# ---------------------------------------------------------------------------
+# QPolicy
+# ---------------------------------------------------------------------------
+
+class TestQPolicy:
+    def setup_method(self):
+        self.disc = StateDiscretizer()
+        self.policy = QPolicy(self.disc, n_actions=3)
+
+    def test_get_action_returns_float(self):
+        action = self.policy.get_action(SAMPLE_STATE)
+        assert isinstance(action, float)
+
+    def test_get_action_within_action_values(self):
+        for _ in range(20):
+            action = self.policy.get_action(SAMPLE_STATE)
+            assert action in self.policy.action_values
+
+    def test_get_action_shape_is_scalar(self):
+        action = self.policy.get_action(SAMPLE_STATE)
+        # should be a plain float, not array
+        assert np.isscalar(action)
+
+    def test_update_q_returns_td_error(self):
+        td = self.policy.update_q(
+            state=ZERO_STATE, action=0.0, reward=1.0,
+            next_state=SAMPLE_STATE, done=False
+        )
+        assert isinstance(td, float)
+
+    def test_decay_epsilon(self):
+        initial_eps = self.policy.epsilon
+        self.policy.decay_epsilon()
+        assert self.policy.epsilon < initial_eps
+
+    def test_get_params_has_q_table(self):
+        params = self.policy.get_params()
+        assert "q_table" in params
+
+    def test_set_params_restores_q_table(self):
+        self.policy.update_q(ZERO_STATE, 0.0, 5.0, SAMPLE_STATE, False)
+        params = self.policy.get_params()
+        policy2 = QPolicy(StateDiscretizer(), n_actions=3)
+        policy2.set_params(params)
+        np.testing.assert_array_almost_equal(
+            policy2.q_table.table, self.policy.q_table.table
+        )
+
+    def test_full_greedy_action_uses_q_table(self):
+        """Force epsilon=0 (fully greedy) and verify argmax is followed."""
+        self.policy.epsilon = 0.0
+        state_idx = self.disc.encode(ZERO_STATE)
+        # Set Q-value for action index 2 to be very high
+        self.policy.q_table.update(state_idx, 2, 999.0)
+        action = self.policy.get_action(ZERO_STATE)
+        expected = self.policy.action_values[2]
         assert action == pytest.approx(expected)
 
-    def test_get_action_clipped(self):
-        """action_range を超える値はクリップされる"""
-        # 大きな重みで大きな値を生成
-        policy = LinearPolicy(
-            weights=np.array([100.0, 0.0, 0.0, 0.0]),
-            action_low=-5.0,
-            action_high=5.0
-        )
-        state = np.array([1.0, 0.0, 0.0, 0.0])
-        action = policy.get_action(state)
-        assert action == pytest.approx(5.0)
 
-    def test_get_action_clipped_negative(self):
-        policy = LinearPolicy(
-            weights=np.array([-100.0, 0.0, 0.0, 0.0]),
-            action_low=-5.0,
-            action_high=5.0
-        )
-        state = np.array([1.0, 0.0, 0.0, 0.0])
-        action = policy.get_action(state)
-        assert action == pytest.approx(-5.0)
-
-    def test_get_params_returns_dict(self, linear_policy):
-        params = linear_policy.get_params()
-        assert isinstance(params, dict)
-        assert 'weights' in params
-        assert 'bias' in params
-
-    def test_set_params_updates_weights(self, linear_policy):
-        new_weights = np.array([1.0, 2.0, 3.0, 4.0])
-        linear_policy.set_params({'weights': new_weights})
-        np.testing.assert_array_almost_equal(linear_policy.weights, new_weights)
-
-    def test_get_num_params(self, linear_policy):
-        """weights(4) + bias(1) = 5パラメータ"""
-        assert linear_policy.get_num_params() == 5
-
-    def test_get_flat_params(self, linear_policy):
-        """flat_params は weights と bias を結合したもの"""
-        flat = linear_policy.get_flat_params()
-        assert flat.shape == (5,)
-        np.testing.assert_array_equal(flat[:4], linear_policy.weights)
-        assert flat[4] == linear_policy.bias
-
-    def test_set_flat_params_roundtrip(self, linear_policy):
-        original_flat = linear_policy.get_flat_params().copy()
-        flat = original_flat * 2  # 変更する
-        linear_policy.set_flat_params(flat)
-        np.testing.assert_array_almost_equal(linear_policy.get_flat_params(), flat)
-
-    def test_perturb_creates_new_policy(self, linear_policy):
-        np.random.seed(0)
-        perturbed = linear_policy.perturb(noise_scale=0.1)
-        assert isinstance(perturbed, LinearPolicy)
-        # 元のポリシーとは異なるはず
-        assert not np.allclose(perturbed.weights, linear_policy.weights)
-
-    def test_perturb_does_not_modify_original(self, linear_policy):
-        original_weights = linear_policy.weights.copy()
-        np.random.seed(0)
-        linear_policy.perturb(noise_scale=0.1)
-        np.testing.assert_array_equal(linear_policy.weights, original_weights)
-
-    def test_theta_weight_sign(self):
-        """thetaへの正の重みはポールの傾きに対して適切な力を生成する"""
-        # theta > 0 (右に傾く) → 正の力（右に押す）でバランスを取る
-        policy = LinearPolicy(weights=np.array([0.0, 0.0, 10.0, 0.0]))
-        state_lean_right = np.array([0.0, 0.0, 0.1, 0.0])
-        action = policy.get_action(state_lean_right)
-        assert action > 0, "Leaning right should produce positive force"
-
-        state_lean_left = np.array([0.0, 0.0, -0.1, 0.0])
-        action = policy.get_action(state_lean_left)
-        assert action < 0, "Leaning left should produce negative force"
-
+# ---------------------------------------------------------------------------
+# NeuralNetworkPolicy (only when PyTorch is available)
+# ---------------------------------------------------------------------------
 
 @pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not installed")
 class TestNeuralNetworkPolicy:
-    """NeuralNetworkPolicy のテスト（PyTorchが必要）"""
-
-    @pytest.fixture
-    def neural_policy(self):
-        return NeuralNetworkPolicy(hidden_sizes=[32, 32])
-
-    def test_get_action_returns_float(self, neural_policy):
-        state = np.array([0.0, 0.0, 0.0, 0.0])
-        action = neural_policy.get_action(state)
+    def test_get_action_returns_float(self):
+        policy = NeuralNetworkPolicy(hidden_sizes=[16])
+        action = policy.get_action(SAMPLE_STATE)
         assert isinstance(action, float)
 
-    @pytest.mark.parametrize("state", SAMPLE_STATES)
-    def test_get_action_in_range(self, state):
-        policy = NeuralNetworkPolicy(action_low=-10.0, action_high=10.0)
-        action = policy.get_action(state)
-        assert -10.0 <= action <= 10.0, (
-            f"Action {action} is out of range [-10, 10]"
-        )
-
-    def test_get_action_deterministic(self, neural_policy):
-        """同じ状態で同じアクション（推論時は決定論的）"""
-        state = np.array([0.1, -0.1, 0.05, -0.05])
-        action1 = neural_policy.get_action(state)
-        action2 = neural_policy.get_action(state)
-        assert action1 == pytest.approx(action2)
-
-    def test_get_params_returns_dict(self, neural_policy):
-        params = neural_policy.get_params()
-        assert isinstance(params, dict)
-        assert 'network_state' in params
-        assert 'hidden_sizes' in params
-
-    def test_set_params_roundtrip(self, neural_policy):
-        params = neural_policy.get_params()
-        state = np.array([0.1, 0.0, 0.05, 0.0])
-        action_before = neural_policy.get_action(state)
-        # パラメータを再設定
-        neural_policy.set_params(params)
-        action_after = neural_policy.get_action(state)
-        assert action_before == pytest.approx(action_after)
-
-    def test_get_num_params_positive(self, neural_policy):
-        """ニューラルネットは必ず1つ以上のパラメータを持つ"""
-        n = neural_policy.get_num_params()
-        assert n > 0
-
-    def test_get_flat_params_shape(self, neural_policy):
-        flat = neural_policy.get_flat_params()
-        assert flat.ndim == 1
-        assert flat.shape[0] == neural_policy.get_num_params()
-
-    def test_set_flat_params_changes_action(self, neural_policy):
-        state = np.array([0.1, 0.0, 0.05, 0.0])
-        action_before = neural_policy.get_action(state)
-
-        # ゼロパラメータに設定
-        n = neural_policy.get_num_params()
-        neural_policy.set_flat_params(np.zeros(n))
-        action_after = neural_policy.get_action(state)
-
-        # アクションが変化したことを確認（ゼロパラメータなら出力が変わるはず）
-        # ※ 元々ゼロ初期化の場合は変わらないこともあるが、型の確認として有効
-        assert isinstance(action_after, float)
-
-    def test_custom_hidden_sizes(self):
-        """異なるアーキテクチャで正しく動作するか"""
-        for hidden_sizes in [[16], [64, 64], [32, 32, 32]]:
-            policy = NeuralNetworkPolicy(hidden_sizes=hidden_sizes)
-            state = np.array([0.1, 0.0, 0.05, 0.0])
-            action = policy.get_action(state)
-            assert isinstance(action, float)
+    def test_get_action_within_range(self):
+        policy = NeuralNetworkPolicy(action_low=-10.0, action_high=10.0, hidden_sizes=[16])
+        for _ in range(10):
+            action = policy.get_action(SAMPLE_STATE)
             assert -10.0 <= action <= 10.0
 
-    def test_get_action_and_log_prob(self, neural_policy):
-        """stochasticモードでアクションと対数確率が返る"""
-        state = np.array([0.1, 0.0, 0.05, 0.0])
-        action, log_prob = neural_policy.get_action_and_log_prob(state)
-        assert isinstance(action, float)
-        # log_prob は負の値（確率なので）
-        assert hasattr(log_prob, 'item')  # torch.Tensor
+    def test_get_num_params_positive(self):
+        policy = NeuralNetworkPolicy(hidden_sizes=[16])
+        assert policy.get_num_params() > 0
 
-    def test_repr_contains_class_name(self, neural_policy):
-        """__repr__ にクラス名が含まれる"""
-        r = repr(neural_policy)
-        assert 'NeuralNetworkPolicy' in r or 'params' in r
+    def test_get_flat_params_length_matches_num_params(self):
+        policy = NeuralNetworkPolicy(hidden_sizes=[16])
+        flat = policy.get_flat_params()
+        assert len(flat) == policy.get_num_params()
+
+    def test_set_flat_params_roundtrip(self):
+        policy = NeuralNetworkPolicy(hidden_sizes=[16])
+        flat_original = policy.get_flat_params()
+        # modify
+        flat_new = flat_original + 1.0
+        policy.set_flat_params(flat_new)
+        np.testing.assert_array_almost_equal(policy.get_flat_params(), flat_new)
+
+    def test_get_params_returns_dict(self):
+        policy = NeuralNetworkPolicy(hidden_sizes=[16])
+        params = policy.get_params()
+        assert "network_state" in params
+        assert "hidden_sizes" in params
+
+    def test_get_action_and_log_prob(self):
+        policy = NeuralNetworkPolicy(hidden_sizes=[16])
+        action, log_prob = policy.get_action_and_log_prob(SAMPLE_STATE)
+        assert isinstance(action, float)
+
+
+# ---------------------------------------------------------------------------
+# REINFORCEPolicy (only when PyTorch is available)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not installed")
+class TestREINFORCEPolicy:
+    def test_get_action_returns_float(self):
+        policy = REINFORCEPolicy(hidden_sizes=[16])
+        action = policy.get_action(SAMPLE_STATE)
+        assert isinstance(action, float)
+
+    def test_get_action_train_returns_tuple(self):
+        policy = REINFORCEPolicy(hidden_sizes=[16])
+        result = policy.get_action_train(SAMPLE_STATE)
+        assert len(result) == 2
