@@ -381,6 +381,191 @@ def _train_hill_climbing(
     }
 
 
+def train_q_learning(
+    env,
+    policy,
+    n_episodes: int = 2000,
+    max_steps: Optional[int] = None,
+    eval_interval: int = 100,
+    eval_episodes: int = 10,
+    verbose: bool = True,
+) -> Dict[str, Any]:
+    """
+    Train a QPolicy using the Q-learning algorithm.
+
+    Unlike train_policy() which uses population-based methods, this performs
+    online TD updates after every step using the Bellman equation:
+        Q(s,a) <- Q(s,a) + alpha * [r + gamma * max_a' Q(s',a') - Q(s,a)]
+
+    Args:
+        env: Environment object (InvertedPendulumEnv)
+        policy: QPolicy instance with update_q() and decay_epsilon() methods
+        n_episodes: Number of training episodes. Recommended: 1000-3000
+        max_steps: Max steps per episode (uses env.max_steps if None)
+        eval_interval: Run a greedy evaluation every N episodes
+        eval_episodes: Number of episodes for each evaluation
+        verbose: Show tqdm progress bar with stats
+
+    Returns:
+        Dictionary with:
+        - 'episode_rewards': List of total rewards per training episode
+        - 'episode_lengths': List of step counts per episode
+        - 'eval_rewards': List of mean greedy rewards at eval checkpoints
+        - 'eval_episodes': Episode numbers where evaluation was run
+        - 'epsilon_history': Epsilon value at end of each episode
+    """
+    max_steps = max_steps or env.max_steps
+
+    episode_rewards: List[float] = []
+    episode_lengths: List[int] = []
+    eval_rewards: List[float] = []
+    eval_episode_nums: List[int] = []
+    epsilon_history: List[float] = []
+
+    iterator = tqdm(range(n_episodes), desc="Q-Learning") if verbose else range(n_episodes)
+
+    for episode in iterator:
+        state = env.reset()
+        total_reward = 0.0
+        steps_taken = 0
+
+        for _ in range(max_steps):
+            action = policy.get_action(state)
+            next_state, reward, done, _ = env.step(action)
+            policy.update_q(state, action, reward, next_state, done)
+            state = next_state
+            total_reward += reward
+            steps_taken += 1
+            if done:
+                break
+
+        policy.decay_epsilon()
+        episode_rewards.append(total_reward)
+        episode_lengths.append(steps_taken)
+        epsilon_history.append(policy.epsilon)
+
+        # Periodic greedy evaluation
+        if (episode + 1) % eval_interval == 0:
+            avg_reward = _evaluate_q_greedy(env, policy, eval_episodes, max_steps)
+            eval_rewards.append(avg_reward)
+            eval_episode_nums.append(episode + 1)
+            if verbose:
+                recent_mean = float(np.mean(episode_rewards[-eval_interval:]))
+                tqdm.write(
+                    f"Ep {episode+1:5d} | "
+                    f"Train {recent_mean:6.1f} | "
+                    f"Eval {avg_reward:6.1f} | "
+                    f"ε={policy.epsilon:.3f}"
+                )
+
+    return {
+        'episode_rewards': episode_rewards,
+        'episode_lengths': episode_lengths,
+        'eval_rewards': eval_rewards,
+        'eval_episodes': eval_episode_nums,
+        'epsilon_history': epsilon_history,
+    }
+
+
+def _evaluate_q_greedy(env, policy, n_episodes: int, max_steps: int) -> float:
+    """
+    Evaluate a QPolicy with epsilon=0 (greedy).
+    Reuses evaluate_policy(); uses try/finally so epsilon is always restored.
+    """
+    saved_epsilon = policy.epsilon
+    try:
+        policy.epsilon = 0.0
+        result = evaluate_policy(env, policy, n_episodes=n_episodes)
+        return float(result['mean_reward'])
+    finally:
+        policy.epsilon = saved_epsilon
+
+
+def train_reinforce(
+    env,
+    policy,
+    n_episodes: int = 500,
+    max_steps: Optional[int] = None,
+    log_interval: int = 50,
+    seed: Optional[int] = None,
+    verbose: bool = True,
+) -> Dict[str, Any]:
+    """
+    Train a REINFORCEPolicy using Monte Carlo policy gradient.
+
+    Unlike train_policy() (population-based) and train_q_learning() (TD),
+    REINFORCE waits until each episode ends before updating the policy.
+    This is the defining characteristic of Monte Carlo policy gradient.
+
+    Args:
+        env: Environment object (InvertedPendulumEnv)
+        policy: REINFORCEPolicy instance
+        n_episodes: Number of training episodes. Recommended: 300-1000
+        max_steps: Max steps per episode (uses env.max_steps if None)
+        log_interval: Print progress every N episodes
+        seed: Random seed for reproducibility
+        verbose: Print progress
+
+    Returns:
+        Dictionary with:
+        - 'episode_rewards': Total reward per episode
+        - 'episode_losses':  Policy gradient loss per episode
+        - 'moving_avg':      Moving-average rewards (window=log_interval)
+    """
+    try:
+        import torch
+    except ImportError:
+        raise ImportError("PyTorch required for train_reinforce()")
+
+    if seed is not None:
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+
+    max_steps = max_steps or env.max_steps
+    episode_rewards: List[float] = []
+    episode_losses: List[float] = []
+
+    iterator = tqdm(range(n_episodes), desc="REINFORCE") if verbose else range(n_episodes)
+
+    for episode in iterator:
+        state = env.reset()
+        total_reward = 0.0
+
+        for _ in range(max_steps):
+            action, log_prob = policy.get_action_train(state)
+            next_state, reward, done, _ = env.step(action)
+            policy.store_transition(log_prob, reward)
+            total_reward += reward
+            state = next_state
+            if done:
+                break
+
+        # Monte Carlo update: called once per episode after it ends
+        loss = policy.update_on_episode()
+        episode_rewards.append(total_reward)
+        episode_losses.append(loss)
+
+        if verbose and (episode + 1) % log_interval == 0:
+            avg = float(np.mean(episode_rewards[-log_interval:]))
+            tqdm.write(
+                f"Ep {episode+1:5d} | "
+                f"Avg Reward {avg:6.1f} | "
+                f"Loss {loss:.4f}"
+            )
+
+    window = log_interval
+    moving_avg = [
+        float(np.mean(episode_rewards[max(0, i - window + 1): i + 1]))
+        for i in range(len(episode_rewards))
+    ]
+
+    return {
+        'episode_rewards': episode_rewards,
+        'episode_losses': episode_losses,
+        'moving_avg': moving_avg,
+    }
+
+
 def compute_returns(
     rewards: List[float],
     gamma: float = 0.99
