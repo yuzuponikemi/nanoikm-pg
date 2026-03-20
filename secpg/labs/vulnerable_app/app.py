@@ -140,6 +140,12 @@ def index():
     <p>修正後のコードと比較してみよう</p>
     <a href="/lab/safe/search">→ 安全な検索ページへ</a>
   </div>
+
+  <div class="lab">
+    <h3>Lab 5: 認証の脆弱性 — 弱いセッション管理</h3>
+    <p>推測可能なセッションIDの問題を体験しよう</p>
+    <a href="/lab/auth/login">→ 認証ラボへ</a>
+  </div>
 </body>
 </html>
 """)
@@ -389,6 +395,123 @@ def safe_search():
   {% endif %}
 </body></html>
 """, query=query, sql_shown=sql_shown, results=results)
+
+
+# ──────────────────────────────────────────
+# Lab 5: 認証の脆弱性 — 弱いセッション管理
+# ──────────────────────────────────────────
+
+auth_sessions = {}  # 脆弱なセッションストア（メモリ上）
+auth_session_counter = 0  # 🚨 脆弱: 連番のセッションID
+
+@app.route("/lab/auth/login", methods=["GET", "POST"])
+def auth_login():
+    global auth_session_counter
+    message = ""
+    current_user = None
+
+    # セッションの確認
+    session_id = request.cookies.get("lab_session")
+    if session_id and session_id in auth_sessions:
+        current_user = auth_sessions[session_id]
+
+    if request.method == "POST":
+        action = request.form.get("action", "")
+
+        if action == "login":
+            username = request.form.get("username", "")
+            password = request.form.get("password", "")
+
+            # 簡易ユーザーDB
+            users = {"alice": "password123", "bob": "qwerty", "admin": "admin_secret_pw"}
+
+            if username in users and users[username] == password:
+                # 🚨 脆弱: 連番のセッションID
+                auth_session_counter += 1
+                new_session_id = str(auth_session_counter)
+                auth_sessions[new_session_id] = {"username": username, "role": "admin" if username == "admin" else "user"}
+
+                resp = redirect(url_for("auth_login"))
+                # 🚨 脆弱: HttpOnly なし、Secure なし
+                resp.set_cookie("lab_session", new_session_id)
+                return resp
+            else:
+                message = "❌ ユーザー名またはパスワードが違います"
+
+        elif action == "logout":
+            if session_id and session_id in auth_sessions:
+                del auth_sessions[session_id]
+            resp = redirect(url_for("auth_login"))
+            resp.delete_cookie("lab_session")
+            return resp
+
+    return render_template_string("""
+<!DOCTYPE html>
+<html lang="ja"><head><meta charset="UTF-8"><title>Lab 5: 認証</title>
+<style>
+  body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px; }
+  .hint { background: #fff3cd; padding: 10px; border-left: 4px solid #ffc107; margin: 10px 0; }
+  .vuln { background: #f8d7da; padding: 10px; border-left: 4px solid #dc3545; margin: 10px 0; }
+  .info { background: #e8f4f8; padding: 10px; border-left: 4px solid #0066cc; margin: 10px 0; }
+  input { display: block; width: 100%; padding: 8px; margin: 6px 0 12px; box-sizing: border-box; }
+  button { padding: 10px 20px; background: #0066cc; color: white; border: none; cursor: pointer; margin: 4px; }
+  .success { color: green; font-weight: bold; }
+  .fail { color: red; }
+</style>
+</head>
+<body>
+  <h1>Lab 5: 認証の脆弱性</h1>
+  <p><a href="/">← 戻る</a></p>
+
+  {% if current_user %}
+  <div class="info">
+    <p>ログイン中: <strong>{{ current_user.username }}</strong>（権限: {{ current_user.role }}）</p>
+    <p>セッションID: <code>{{ session_id }}</code></p>
+    <form method="post" style="display:inline">
+      <input type="hidden" name="action" value="logout">
+      <button type="submit" style="background:#dc3545;">ログアウト</button>
+    </form>
+  </div>
+
+  <div class="vuln">
+    <h3>この認証の脆弱性:</h3>
+    <ul>
+      <li>セッションIDが連番（{{ session_id }}） → 他のユーザーのIDを推測可能</li>
+      <li>Cookie に HttpOnly が未設定 → XSS で盗取可能</li>
+      <li>Cookie に Secure が未設定 → HTTP通信で盗聴可能</li>
+      <li>パスワードが平文で保存 → DB漏洩で全パスワード流出</li>
+    </ul>
+  </div>
+
+  {% else %}
+
+  <form method="post">
+    <input type="hidden" name="action" value="login">
+    <label>ユーザー名</label>
+    <input name="username" placeholder="alice">
+    <label>パスワード</label>
+    <input name="password" type="text" placeholder="password123">
+    <button type="submit">ログイン</button>
+  </form>
+
+  {% if message %}
+  <p class="fail">{{ message }}</p>
+  {% endif %}
+
+  {% endif %}
+
+  <div class="hint">
+    <h3>攻撃シナリオ</h3>
+    <ol>
+      <li>alice でログインする（password123）</li>
+      <li>Cookie のセッションID（数字）を確認する</li>
+      <li>別のブラウザ/シークレットウィンドウで Cookie を手動セット</li>
+      <li>セッションIDを 1 ずつ変えて他ユーザーになりすまし</li>
+    </ol>
+    <p>ブラウザの開発者ツール → Application → Cookies で確認できます</p>
+  </div>
+</body></html>
+""", current_user=current_user, session_id=session_id, message=message)
 
 
 # ──────────────────────────────────────────
