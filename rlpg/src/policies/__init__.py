@@ -10,9 +10,11 @@ from .actor_critic import ActorCriticPolicy
 from .reinforce_policy import ReinforcePolicy
 from .q_policy import QTable, QPolicy
 from .policy_gradient import REINFORCEPolicy
+from .dqn_policy import ReplayBuffer, QNetwork, DQNPolicy
 
 __all__ = [
     "Policy", "RandomPolicy", "LinearPolicy", "NeuralNetworkPolicy",
     "ActorCriticPolicy", "ReinforcePolicy",
     "QTable", "QPolicy", "REINFORCEPolicy",
+    "ReplayBuffer", "QNetwork", "DQNPolicy",
 ]
