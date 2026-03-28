@@ -11,10 +11,12 @@ from .reinforce_policy import ReinforcePolicy
 from .q_policy import QTable, QPolicy
 from .policy_gradient import REINFORCEPolicy
 from .dqn_policy import ReplayBuffer, QNetwork, DQNPolicy
+from .ppo_policy import PPOActorCriticNet, RolloutBuffer, PPOPolicy
 
 __all__ = [
     "Policy", "RandomPolicy", "LinearPolicy", "NeuralNetworkPolicy",
     "ActorCriticPolicy", "ReinforcePolicy",
     "QTable", "QPolicy", "REINFORCEPolicy",
     "ReplayBuffer", "QNetwork", "DQNPolicy",
+    "PPOActorCriticNet", "RolloutBuffer", "PPOPolicy",
 ]
