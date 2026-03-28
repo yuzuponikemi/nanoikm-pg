@@ -613,6 +613,196 @@ def normalize_returns(returns: np.ndarray) -> np.ndarray:
     return (returns - mean) / std
 
 
+def _compute_epsilon(
+    episode: int,
+    n_episodes: int,
+    epsilon_start: float,
+    epsilon_end: float,
+    schedule: str = 'exponential',
+) -> float:
+    """
+    Compute epsilon value for a given episode using a decay schedule.
+
+    Args:
+        episode:       Current episode number (0-indexed)
+        n_episodes:    Total number of episodes
+        epsilon_start: Initial epsilon value
+        epsilon_end:   Final epsilon value
+        schedule:      Decay schedule ('linear', 'exponential', or 'cosine')
+
+    Returns:
+        Epsilon value for the current episode
+    """
+    progress = episode / max(n_episodes - 1, 1)  # [0.0, 1.0]
+
+    if schedule == 'linear':
+        return epsilon_start - (epsilon_start - epsilon_end) * progress
+
+    elif schedule == 'exponential':
+        if epsilon_end <= 0:
+            epsilon_end = 1e-4
+        decay = (epsilon_end / epsilon_start) ** (1.0 / max(n_episodes - 1, 1))
+        return max(epsilon_end, epsilon_start * (decay ** episode))
+
+    elif schedule == 'cosine':
+        cos_factor = 0.5 * (1 + np.cos(np.pi * progress))
+        return epsilon_end + (epsilon_start - epsilon_end) * cos_factor
+
+    else:
+        raise ValueError(f"Unknown epsilon schedule: {schedule}. "
+                         f"Choose from: 'linear', 'exponential', 'cosine'")
+
+
+def train_q_learning(
+    env,
+    policy,
+    n_episodes: int = 1000,
+    max_steps_per_episode: Optional[int] = None,
+    epsilon_start: float = 1.0,
+    epsilon_end: float = 0.01,
+    epsilon_schedule: str = 'exponential',
+    eval_interval: int = 50,
+    n_eval_episodes: int = 10,
+    verbose: bool = True,
+    seed: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Train a Q-learning policy using an online, step-by-step update loop.
+
+    Unlike train_policy() which updates parameters at the episode level
+    using evolutionary methods, this function implements the standard
+    Q-learning algorithm that updates the Q-table after every step.
+
+    The policy must implement an update(state, action, reward, next_state, done)
+    method (as in QPolicy).
+
+    Epsilon is decayed from epsilon_start to epsilon_end over the course
+    of training. At evaluation time, epsilon is temporarily set to 0.0
+    (greedy policy) to measure true performance.
+
+    Args:
+        env:                   Environment object
+        policy:                QPolicy (must have update() and epsilon attribute)
+        n_episodes:            Number of training episodes
+        max_steps_per_episode: Step limit per episode (uses env.max_steps if None)
+        epsilon_start:         Initial exploration rate (typically 1.0)
+        epsilon_end:           Final exploration rate (typically 0.01)
+        epsilon_schedule:      Epsilon decay schedule: 'linear', 'exponential', 'cosine'
+        eval_interval:         Evaluate greedy policy every N episodes
+        n_eval_episodes:       Number of episodes for each evaluation
+        verbose:               Print training progress
+        seed:                  Random seed
+
+    Returns:
+        Dictionary with:
+        - 'episode_rewards':   Cumulative reward per training episode
+        - 'episode_lengths':   Number of steps per training episode
+        - 'epsilon_history':   Epsilon value at the start of each episode
+        - 'eval_rewards':      Mean greedy reward at each evaluation point
+        - 'eval_episodes':     Episode numbers where evaluation occurred
+        - 'td_error_history':  Mean absolute TD error per episode
+        - 'best_q_table':      Q-table snapshot at the best evaluation reward
+        - 'best_eval_reward':  Highest mean evaluation reward achieved
+    """
+    if seed is not None:
+        np.random.seed(seed)
+
+    if not hasattr(policy, 'update'):
+        raise ValueError(
+            "Policy must have an update(state, action, reward, next_state, done) method. "
+            "Use QPolicy from src.policies.q_policy."
+        )
+
+    max_steps = max_steps_per_episode or env.max_steps
+
+    episode_rewards = []
+    episode_lengths = []
+    epsilon_history = []
+    eval_rewards = []
+    eval_episodes = []
+    td_error_history = []
+
+    best_eval_reward = float('-inf')
+    best_q_table = policy.q_table.copy()
+
+    iterator = range(n_episodes)
+    if verbose:
+        iterator = tqdm(iterator, desc="Q-Learning")
+
+    for episode in iterator:
+        # Apply epsilon decay schedule
+        epsilon = _compute_epsilon(
+            episode, n_episodes, epsilon_start, epsilon_end, epsilon_schedule
+        )
+        policy.epsilon = epsilon
+        epsilon_history.append(epsilon)
+
+        # Run one training episode
+        state = env.reset()
+        episode_reward = 0.0
+        episode_td_errors = []
+
+        for step in range(max_steps):
+            action = policy.get_action(state)
+            next_state, reward, done, info = env.step(action)
+
+            # Core Q-learning update
+            td_error = policy.update(state, action, reward, next_state, done)
+            episode_td_errors.append(abs(td_error))
+
+            episode_reward += reward
+            state = next_state
+
+            if done:
+                break
+
+        episode_rewards.append(episode_reward)
+        episode_lengths.append(step + 1)
+        td_error_history.append(
+            float(np.mean(episode_td_errors)) if episode_td_errors else 0.0
+        )
+
+        # Periodic evaluation with greedy policy (epsilon=0)
+        if (episode + 1) % eval_interval == 0 or episode == n_episodes - 1:
+            saved_epsilon = policy.epsilon
+            policy.epsilon = 0.0
+
+            eval_result = evaluate_policy(env, policy, n_episodes=n_eval_episodes)
+            eval_mean = eval_result['mean_reward']
+            eval_rewards.append(eval_mean)
+            eval_episodes.append(episode + 1)
+
+            policy.epsilon = saved_epsilon
+
+            # Save best Q-table
+            if eval_mean > best_eval_reward:
+                best_eval_reward = eval_mean
+                best_q_table = policy.q_table.copy()
+
+            if verbose:
+                iterator.set_postfix({
+                    'eps': f'{epsilon:.3f}',
+                    'ep_r': f'{episode_reward:.0f}',
+                    'eval': f'{eval_mean:.1f}',
+                    'best': f'{best_eval_reward:.1f}',
+                })
+
+    # Restore best Q-table and set final epsilon
+    policy.q_table = best_q_table
+    policy.epsilon = epsilon_end
+
+    return {
+        'episode_rewards': episode_rewards,
+        'episode_lengths': episode_lengths,
+        'epsilon_history': epsilon_history,
+        'eval_rewards': eval_rewards,
+        'eval_episodes': eval_episodes,
+        'td_error_history': td_error_history,
+        'best_q_table': best_q_table,
+        'best_eval_reward': best_eval_reward,
+    }
+
+
 def train_reinforce(
     policy,
     env,
@@ -750,5 +940,4 @@ def train_actor_critic(
     return {
         'reward_history': reward_history,
         'actor_loss_history': actor_loss_history,
-        'critic_loss_history': critic_loss_history,
-    }
+        'critic_loss_history': critic_loss_history,    }
