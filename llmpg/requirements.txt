@@ -1,0 +1,33 @@
+# llmpg: LLM/Agent Playground 依存パッケージ
+# pip install -r requirements.txt
+
+# コア
+requests>=2.31.0
+numpy>=1.24.0
+
+# ベクトルDB（オプション、03_rag_from_scratch.ipynb で使用）
+chromadb>=0.4.0
+# faiss-cpu>=1.7.4  # 大規模ベクトル検索が必要な場合
+
+# 埋め込み・テキスト処理
+# sentence-transformers>=2.2.0  # ローカル埋め込みモデルを使う場合
+
+# LLMエコシステム（OpenAI互換クライアント）
+openai>=1.0.0  # Ollama の OpenAI互換エンドポイント利用時
+
+# ファインチューニング（04_finetuning_with_unsloth.ipynb）
+# GPU環境（Google Colab等）でのみインストール
+# unsloth[colab-new]  # Colab の場合
+# unsloth[cu121-torch230]  # ローカルGPU（CUDA 12.1 + PyTorch 2.3.0）の場合
+# trl>=0.7.0
+# datasets>=2.14.0
+
+# 評価（05_llm_evaluation.ipynb）
+# rouge-score>=0.1.2  # ROUGE評価指標
+
+# Jupyter
+ipywidgets>=8.0.0
+tqdm>=4.65.0
+
+# 開発・テスト
+pytest>=7.0.0
