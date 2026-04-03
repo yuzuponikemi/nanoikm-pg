@@ -339,6 +339,8 @@ class DDPGPolicy(Policy):
 
     def __init__(
         self,
+        state_dim: int = 4,
+        action_dim: int = 1,
         hidden_sizes: List[int] = [64, 64],
         action_low: float = -10.0,
         action_high: float = 10.0,
@@ -348,6 +350,9 @@ class DDPGPolicy(Policy):
         critic_lr: float = 1e-3,
         replay_buffer_capacity: int = 100_000,
         warmup_steps: int = 1000,
+        ou_mu: float = 0.0,
+        ou_theta: float = 0.15,
+        ou_sigma: float = 0.3,
     ) -> None:
         if not TORCH_AVAILABLE:
             raise ImportError(
@@ -355,6 +360,8 @@ class DDPGPolicy(Policy):
                 "Install it with: pip install torch"
             )
 
+        self.state_dim = state_dim
+        self.action_dim = action_dim
         self.hidden_sizes = hidden_sizes
         self.action_low = action_low
         self.action_high = action_high
@@ -370,12 +377,12 @@ class DDPGPolicy(Policy):
         self.action_offset = (action_high + action_low) / 2.0
 
         # Networks
-        self.actor = DDPGActorNet(state_dim=4, action_dim=1, hidden_sizes=hidden_sizes)
-        self.critic = DDPGCriticNet(state_dim=4, action_dim=1, hidden_sizes=hidden_sizes)
+        self.actor = DDPGActorNet(state_dim=state_dim, action_dim=action_dim, hidden_sizes=hidden_sizes)
+        self.critic = DDPGCriticNet(state_dim=state_dim, action_dim=action_dim, hidden_sizes=hidden_sizes)
 
         # Target networks (initialized with same weights)
-        self.actor_target = DDPGActorNet(state_dim=4, action_dim=1, hidden_sizes=hidden_sizes)
-        self.critic_target = DDPGCriticNet(state_dim=4, action_dim=1, hidden_sizes=hidden_sizes)
+        self.actor_target = DDPGActorNet(state_dim=state_dim, action_dim=action_dim, hidden_sizes=hidden_sizes)
+        self.critic_target = DDPGCriticNet(state_dim=state_dim, action_dim=action_dim, hidden_sizes=hidden_sizes)
         self._hard_update(self.actor, self.actor_target)
         self._hard_update(self.critic, self.critic_target)
 
@@ -387,7 +394,7 @@ class DDPGPolicy(Policy):
         self.replay_buffer = DDPGReplayBuffer(capacity=replay_buffer_capacity)
 
         # Exploration noise
-        self.ou_noise = OUNoise(action_dim=1, mu=0.0, theta=0.15, sigma=0.3)
+        self.ou_noise = OUNoise(action_dim=action_dim, mu=ou_mu, theta=ou_theta, sigma=ou_sigma)
 
         # Statistics
         self._episode_rewards = []
@@ -571,6 +578,8 @@ class DDPGPolicy(Policy):
     def get_params(self) -> Dict[str, Any]:
         """Get network parameters for serialization."""
         return {
+            "state_dim": self.state_dim,
+            "action_dim": self.action_dim,
             "actor": self.actor.state_dict(),
             "critic": self.critic.state_dict(),
             "actor_target": self.actor_target.state_dict(),
